@@ -19,6 +19,8 @@ pub mod interface_ports;
 mod module_class_scope;
 pub(crate) mod constructor_forwarding;
 pub(crate) mod relaxed_static;
+mod scoped_constant;
+pub use scoped_constant::{fold_in_scope, type_width_in_scope};
 mod param_prefix_index;
 mod param_scope;
 
