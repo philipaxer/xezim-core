@@ -849,6 +849,31 @@ pub fn stamp_automatic_subroutines(descs: &mut [Description]) {
     }
 }
 
+/// §13.3.1, §26.3: a package subroutine's identity. Every entry hoisted from
+/// the declaration, bare or qualified, clones it.
+pub fn stamp_package_subroutine_idents(descs: &mut [Description]) {
+    use crate::ast::decl::SubroutineIdent;
+    for d in descs.iter_mut() {
+        let Description::Package(p) = d else { continue };
+        let pkg = p.name.name.clone();
+        let of = |name: &str| SubroutineIdent {
+            canonical: format!("{pkg}::{name}"),
+            ..SubroutineIdent::default()
+        };
+        for it in p.items.iter_mut() {
+            match it {
+                PackageItem::Function(fd) if fd.name.scopes.is_empty() => {
+                    fd.ident = Some(of(&fd.name.name.name));
+                }
+                PackageItem::Task(td) if td.name.scopes.is_empty() => {
+                    td.ident = Some(of(&td.name.name.name));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 pub fn qualify_colliding_package_types(descs: &mut [Description]) -> Result<(), String> {
     QUALIFIED_MEMBERS.with(|m| m.borrow_mut().clear());
 

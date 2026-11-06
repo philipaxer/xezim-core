@@ -198,7 +198,8 @@ pub use value::Value;
 /// entry is 2-state (§23.3.3).
 /// \x3a = \x39 + the formal's path, not its instance's, in
 /// ElaboratedModule.input_port_actuals.
-pub const XEZIM_BYTECODE_MAGIC: &[u8; 8] = b"XEZIMBC\x3a";
+/// \x3b = \x3a + SubroutineIdent on function and task declarations.
+pub const XEZIM_BYTECODE_MAGIC: &[u8; 8] = b"XEZIMBC\x3b";
 
 /// Name of the synthetic root that instantiates every top of a multi-top
 /// design (§23.3.3), each instance named after its module. It is not part of
@@ -1674,6 +1675,7 @@ fn parse_and_elaborate(
     body_type_params::normalize(&mut all_descriptions);
     pkg_scope::qualify_colliding_package_types(&mut all_descriptions)?;
     pkg_scope::stamp_automatic_subroutines(&mut all_descriptions);
+    pkg_scope::stamp_package_subroutine_idents(&mut all_descriptions);
     let cli = module_timescale_cli();
     // Deterministic: `module_timescale_exp` is filled by walking this map,
     // and its serialized order follows the order entries are inserted in.
