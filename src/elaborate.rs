@@ -13531,7 +13531,8 @@ pub fn elaborate_module_with_defs(
                 // silently overrides same-named free functions, so a bare call
                 // dispatches the class body without `this` binding.
                 if fd.name.scopes.is_empty() {
-                    elab.functions.insert(fd.name.name.name.clone(), fd.clone());
+                    elab.functions
+                        .insert(fd.name.name.name.clone(), body_function(fd));
                 }
             }
             ModuleItem::TaskDeclaration(td) => {
@@ -13624,7 +13625,7 @@ pub fn elaborate_module_with_defs(
                         ));
                     }
                     elab.note_decl_site(&td.name.name.name, td.name.name.span, "task", true);
-                    elab.tasks.insert(td.name.name.name.clone(), td.clone());
+                    elab.tasks.insert(td.name.name.name.clone(), body_task(td));
                 }
             }
             ModuleItem::AliasDecl(terms) => {
@@ -19787,7 +19788,8 @@ fn elaborate_items_numbered(
                 // Same scope filter as above: out-of-class method definitions
                 // must not override free functions.
                 if fd.name.scopes.is_empty() {
-                    elab.functions.insert(fd.name.name.name.clone(), fd.clone());
+                    elab.functions
+                        .insert(fd.name.name.name.clone(), body_function(fd));
                 }
             }
             ModuleItem::TaskDeclaration(td) => {
@@ -19845,7 +19847,7 @@ fn elaborate_items_numbered(
                 // Same scope filter: don't let out-of-class method definitions
                 // override free tasks in the module namespace.
                 if td.name.scopes.is_empty() {
-                    elab.tasks.insert(td.name.name.name.clone(), td.clone());
+                    elab.tasks.insert(td.name.name.name.clone(), body_task(td));
                 }
             }
             ModuleItem::ImportDeclaration(imp) => {
@@ -20033,6 +20035,24 @@ fn stamp_gen_scope(items: &mut [ModuleItem], scope: &str) {
     }
 }
 
+/// A definition-body function's table entry; a block's already has its ident.
+fn body_function(fd: &FunctionDeclaration) -> FunctionDeclaration {
+    let mut fd = fd.clone();
+    if fd.ident.is_none() {
+        fd.ident = Some(SubroutineIdent::of_body(&fd.name.name.name));
+    }
+    fd
+}
+
+/// A definition-body task's table entry; a block's already has its ident.
+fn body_task(td: &TaskDeclaration) -> TaskDeclaration {
+    let mut td = td.clone();
+    if td.ident.is_none() {
+        td.ident = Some(SubroutineIdent::of_body(&td.name.name.name));
+    }
+    td
+}
+
 /// §27.6: a subroutine declared in the labelled generate-if/case branch `blk`
 /// is `blk.f` from outside the branch. The branch's items are elaborated into
 /// the enclosing module under their own names (so the branch's own bare calls
@@ -20040,14 +20060,33 @@ fn stamp_gen_scope(items: &mut [ModuleItem], scope: &str) {
 /// `blk.f(0)` — or `u.blk.f(0)` once the module is instantiated as `u` — then
 /// finds its body through the ordinary hierarchical-name lookup instead of
 /// silently returning 0. A function's result variable is its name, so the
-/// alias body assigns `blk.f`.
+/// alias body assigns `blk.f`. Both entries carry one `SubroutineIdent`.
 fn alias_labelled_subroutines(items: &mut Vec<ModuleItem>, label: &str) {
     let no_local = std::collections::HashSet::default();
     let no_iface = HashMap::default();
+    fn compose(cur: &Option<SubroutineIdent>, label: &str, name: &str) -> SubroutineIdent {
+        match cur {
+            Some(id) => SubroutineIdent {
+                canonical: format!("{}.{}", label, id.canonical),
+                instance: id.instance.clone(),
+                scope: if id.scope.is_empty() {
+                    label.to_string()
+                } else {
+                    format!("{}.{}", label, id.scope)
+                },
+            },
+            None => SubroutineIdent {
+                canonical: format!("{}.{}", label, name),
+                instance: String::new(),
+                scope: label.to_string(),
+            },
+        }
+    }
     let aliases: Vec<ModuleItem> = items
-        .iter()
+        .iter_mut()
         .filter_map(|it| match it {
             ModuleItem::FunctionDeclaration(fd) => {
+                fd.ident = Some(compose(&fd.ident, label, &fd.name.name.name));
                 let mut a = fd.clone();
                 let alias = format!("{}.{}", label, fd.name.name.name);
                 let mut result_var = HashMap::default();
@@ -20061,6 +20100,7 @@ fn alias_labelled_subroutines(items: &mut Vec<ModuleItem>, label: &str) {
                 Some(ModuleItem::FunctionDeclaration(a))
             }
             ModuleItem::TaskDeclaration(td) => {
+                td.ident = Some(compose(&td.ident, label, &td.name.name.name));
                 let mut a = td.clone();
                 a.name.name.name = format!("{}.{}", label, td.name.name.name);
                 Some(ModuleItem::TaskDeclaration(a))
@@ -20069,6 +20109,19 @@ fn alias_labelled_subroutines(items: &mut Vec<ModuleItem>, label: &str) {
         })
         .collect();
     items.extend(aliases);
+}
+
+/// §13.3.1: an instance's copy of a declaration. `name` is its spelling in the
+/// definition.
+fn prefix_subroutine_ident(ident: &mut Option<SubroutineIdent>, name: &str, inst_prefix: &str) {
+    let id = ident.get_or_insert_with(|| SubroutineIdent::of_body(name));
+    id.canonical = cat2(inst_prefix, &id.canonical);
+    let inst = inst_prefix.strip_suffix('.').unwrap_or(inst_prefix);
+    id.instance = if id.instance.is_empty() {
+        inst.to_string()
+    } else {
+        format!("{}.{}", inst, id.instance)
+    };
 }
 
 /// The subroutines `scope_generated_subroutines` renames that a bare call can
@@ -20103,10 +20156,20 @@ fn scope_generated_subroutines(items: &mut [ModuleItem], scope: &str) {
     for item in items {
         match item {
             ModuleItem::FunctionDeclaration(fd) => {
-                fd.name.name.name = format!("{}.{}", scope, fd.name.name.name);
+                let name = format!("{}.{}", scope, fd.name.name.name);
+                fd.ident = Some(SubroutineIdent {
+                    scope: scope.to_string(),
+                    ..SubroutineIdent::of_body(&name)
+                });
+                fd.name.name.name = name;
             }
             ModuleItem::TaskDeclaration(td) => {
-                td.name.name.name = format!("{}.{}", scope, td.name.name.name);
+                let name = format!("{}.{}", scope, td.name.name.name);
+                td.ident = Some(SubroutineIdent {
+                    scope: scope.to_string(),
+                    ..SubroutineIdent::of_body(&name)
+                });
+                td.name.name.name = name;
             }
             ModuleItem::GenerateRegion(gr) => {
                 scope_generated_subroutines(&mut gr.items, scope);
@@ -42243,6 +42306,11 @@ fn inline_module_items(
                         for n in stmt_list_declared_names(&fd.items) {
                             fn_locals.remove(n);
                         }
+                        prefix_subroutine_ident(
+                            &mut new_fd.ident,
+                            &fd.name.name.name,
+                            &inst_prefix,
+                        );
                         for p in &mut new_fd.ports {
                             bake_formal_type(p);
                             if let Some(def) = &p.default {
@@ -42345,6 +42413,11 @@ fn inline_module_items(
                         for n in stmt_list_declared_names(&td.items) {
                             task_locals.remove(n);
                         }
+                        prefix_subroutine_ident(
+                            &mut new_td.ident,
+                            &td.name.name.name,
+                            &inst_prefix,
+                        );
                         for p in &mut new_td.ports {
                             bake_formal_type(p);
                             if let Some(def) = &p.default {

@@ -1310,6 +1310,41 @@ pub struct GenvarDeclaration {
     pub span: Span,
 }
 
+/// §13.3.1, §6.21, §21.2.1.5: the elaborated identity of a subroutine
+/// declaration, shared by every table entry that names the same declaration.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SubroutineIdent {
+    /// One string per elaborated declaration, top-relative: `u.g_a.look`,
+    /// `g[1].h.f`, `look`, `pkg::f`. Keys static storage and initialization.
+    pub canonical: String,
+    /// The instance the body runs in: `u`, `u.c`, empty for the top. Frame
+    /// scope for timescale, clocking blocks and signals (§3.14, §14.3, §23.9).
+    pub instance: String,
+    /// The lexical scope path inside the instance: `g_a`, `a.n`, empty for the
+    /// definition body.
+    pub scope: String,
+}
+
+impl SubroutineIdent {
+    /// A subroutine declared in a definition body under `name`.
+    pub fn of_body(name: &str) -> Self {
+        Self {
+            canonical: name.to_string(),
+            ..Self::default()
+        }
+    }
+}
+
+/// Frame scope: the ident's instance. No ident (a class method or DPI
+/// prototype) means no instance.
+fn body_instance(ident: &Option<SubroutineIdent>) -> Option<&str> {
+    ident
+        .as_ref()
+        .filter(|id| !id.instance.is_empty())
+        .map(|id| id.instance.as_str())
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FunctionDeclaration {
@@ -1333,7 +1368,23 @@ pub struct FunctionDeclaration {
     /// it. The elaborator fills `ports` in from the base chain.
     #[cfg_attr(feature = "serde", serde(default))]
     pub default_args: bool,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub ident: Option<SubroutineIdent>,
     pub span: Span,
+}
+
+impl FunctionDeclaration {
+    /// §13.3.1: the name static storage is keyed by.
+    pub fn canonical(&self) -> &str {
+        self.ident
+            .as_ref()
+            .map_or(self.name.name.name.as_str(), |id| id.canonical.as_str())
+    }
+
+    /// §3.14, §23.9: the instance the body runs in; None for the top.
+    pub fn body_instance(&self) -> Option<&str> {
+        body_instance(&self.ident)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1351,7 +1402,23 @@ pub struct TaskDeclaration {
     /// only for the strict-check pass. Not consumed by elaboration.
     #[cfg_attr(feature = "serde", serde(default))]
     pub strict_body_ports: Vec<Identifier>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub ident: Option<SubroutineIdent>,
     pub span: Span,
+}
+
+impl TaskDeclaration {
+    /// §13.3.1: the name static storage is keyed by.
+    pub fn canonical(&self) -> &str {
+        self.ident
+            .as_ref()
+            .map_or(self.name.name.name.as_str(), |id| id.canonical.as_str())
+    }
+
+    /// §3.14, §23.9: the instance the body runs in; None for the top.
+    pub fn body_instance(&self) -> Option<&str> {
+        body_instance(&self.ident)
+    }
 }
 
 #[derive(Debug, Clone)]
