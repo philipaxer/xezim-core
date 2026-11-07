@@ -14,6 +14,7 @@ use crate::shared_names::{SharedName, SharedNameMap};
 use std::rc::Rc;
 
 pub(crate) mod array_params;
+pub mod bind;
 mod canonical;
 mod const_function_scope;
 #[cfg(test)]
@@ -27404,6 +27405,7 @@ fn member_ref_expr(base: &Expression, member: &Identifier) -> Expression {
                     span: base.span,
                     cached_signal_id: crate::ast::cache::SignalCache::new(None),
                     cached_resolved_name: crate::ast::cache::NameCache::new(),
+                    bound: crate::ast::binding::Bound::UNSET,
                 }),
                 base.span,
             );
@@ -32958,6 +32960,7 @@ fn gen_renamed_ref(renamed: String) -> Expression {
         span: Span { start: 0, end: 0 },
         cached_signal_id: crate::ast::cache::SignalCache::new(None),
         cached_resolved_name: crate::ast::cache::NameCache::new(),
+        bound: crate::ast::binding::Bound::UNSET,
     };
     Expression::new(ExprKind::Ident(hier), Span { start: 0, end: 0 })
 }
@@ -45071,6 +45074,23 @@ pub fn take_elab_sources() -> (Vec<String>, Vec<String>) {
     ELAB_SOURCES_TLS.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
+/// `file:line` of a span of a definition in the primary sources; `def@offset`
+/// for one adopted from a library, whose text is not published yet.
+pub(crate) fn audit_location(def: &str, span: Span) -> String {
+    let at = ELAB_MODULE_FILES_TLS.with(|c| c.borrow().get(def).copied()).and_then(|i| {
+        let i = i as usize;
+        ELAB_SOURCES_TLS.with(|s| {
+            ELAB_LINE_MAPS_TLS.with(|m| {
+                let s = s.borrow();
+                let text = s.0.get(i)?;
+                let loc = m.borrow().get(i)?.as_ref()?.location_string(text, span)?;
+                loc.rsplit_once(':').map(|(l, _)| l.to_string())
+            })
+        })
+    });
+    at.unwrap_or_else(|| format!("{def}@{}", span.start))
+}
+
 /// Resolve a `Span` (a byte offset into its own file's PREPROCESSED text) to
 /// `file:line:col` (`file:line` without a line map), for elaboration
 /// diagnostics. The file is the one the text came from — an `include`d file,
@@ -47906,6 +47926,7 @@ fn make_ident_expr(name: &str) -> Expression {
             span: Span::dummy(),
             cached_signal_id: crate::ast::cache::SignalCache::new(None),
             cached_resolved_name: crate::ast::cache::NameCache::new(),
+            bound: crate::ast::binding::Bound::UNSET,
         }),
         Span::dummy(),
     )
@@ -49741,6 +49762,7 @@ pub fn substitute_bare_idents_stmt(
             span: stmt.span,
             cached_signal_id: crate::ast::cache::SignalCache::new(None),
             cached_resolved_name: crate::ast::cache::NameCache::new(),
+            bound: crate::ast::binding::Bound::UNSET,
         };
         port_map.insert(
             from.clone(),
@@ -49817,6 +49839,7 @@ pub fn rename_process_shadowed_locals(
                         span: d.name.span,
                         cached_signal_id: crate::ast::cache::SignalCache::new(None),
                         cached_resolved_name: crate::ast::cache::NameCache::new(),
+                        bound: crate::ast::binding::Bound::UNSET,
                     };
                     map.insert(
                         d.name.name.clone(),
