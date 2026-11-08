@@ -3680,6 +3680,7 @@ fn make_multi_top_wrapper(modules: &[String]) -> ast::module::ModuleDeclaration 
                 },
                 params: None,
                 instances: vec![HierarchicalInstance {
+                    decl: crate::ast::binding::Bound::UNSET,
                     name: ast::Identifier {
                         name: name.clone(),
                         span: ast::Span::dummy(),
